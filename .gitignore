@@ -1,0 +1,14 @@
+venv/
+__pycache__/
+*.pyc
+
+# Vector store - rebuildable from the source PDFs, and large
+chroma_db/
+
+# Uploaded and test documents - may contain personal information
+uploads/
+data/*.pdf
+
+# Evaluation reports are kept: they are the project's evidence.
+# Uncomment to exclude them.
+# results/

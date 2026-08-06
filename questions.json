@@ -1,0 +1,58 @@
+[
+  {
+    "id": "q1",
+    "question": "What supercomputer did you work on during the internship?",
+    "answerable": true,
+    "expect_any": ["Toubkal"],
+    "tests": "Vocabulary mismatch - the document says 'cluster', the question says 'supercomputer'. Pure semantic retrieval."
+  },
+  {
+    "id": "q2",
+    "question": "How many standard compute nodes does the cluster have?",
+    "answerable": true,
+    "expect_any": ["1,272", "1272"],
+    "tests": "Exact numeric fact. The number must be reported without drift."
+  },
+  {
+    "id": "q3",
+    "question": "What GPUs are used in the cluster?",
+    "answerable": true,
+    "expect_any": ["A100", "H100", "NVIDIA"],
+    "tests": "Detail sitting mid-chunk rather than near a heading."
+  },
+  {
+    "id": "q4",
+    "question": "What happened on the first day of the internship?",
+    "answerable": true,
+    "expect_any": ["ReDX"],
+    "tests": "Retrieval by position in the document rather than by topic. expect_any tightened to the one distinguishing term (company name) after the suite was found to pass 8/8 in every configuration tested, including a known-wrong-chunk baseline - 'welcomed'/'team'/'environment' are generic enough to appear in a wrong answer too. See BUILD_LOG.md, 'hardening the test suite'."
+  },
+  {
+    "id": "q5",
+    "question": "Where is the cluster located?",
+    "answerable": true,
+    "expect_any": ["Mohammed VI", "Polytechnic", "University"],
+    "tests": "Fact stated once, in passing, inside a longer passage."
+  },
+  {
+    "id": "q6",
+    "question": "What was the purpose of the Slurm script?",
+    "answerable": true,
+    "expect_any": ["accounting", "collect", "usage"],
+    "tests": "Content near the end of the document, in the shortest chunk. 'job' dropped from expect_any (too generic - see q4 note)."
+  },
+  {
+    "id": "q7",
+    "question": "What is the capital of Japan?",
+    "answerable": false,
+    "expect_any": [],
+    "tests": "REFUSAL. Trivially answerable from training data, absent from the document. If this answers 'Tokyo', grounding has failed."
+  },
+  {
+    "id": "q8",
+    "question": "What salary was paid for this internship?",
+    "answerable": false,
+    "expect_any": [],
+    "tests": "REFUSAL. Plausible for the document to contain, but it does not. Harder than q7 because retrieval will return related-looking chunks."
+  }
+]
