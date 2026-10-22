@@ -1601,3 +1601,66 @@ The Google implementation in `websearch.py` is finished, correct code, never dis
 | DuckDuckGo - reliability | Real constraint, not a bug: blocks under repeated use, for a duration measured in tens of minutes, not seconds |
 | Engineering response to the DuckDuckGo constraint | A cooldown cache (`_ddg_blocked_since`) so the app fails fast and honestly instead of repeatedly wasting a doomed request |
 | `WEB_SEARCH_BACKEND`, end of day | `"duckduckgo"` - the one that actually runs without a card |
+# ADAS project direction — Step 1: shared document collection
+
+- Added `adas_documents` as the shared collection target and configured the
+  ADAS PDF directory and metadata manifest in `src/config.py`.
+- Added `tools/index_adas.py`; it hashes each PDF, skips unchanged content and
+  labels, and replaces that source's chunks if either changes.
+- Added the empty `data/adas/metadata.json` manifest. No PDF was created or
+  downloaded; the folder currently contains zero source PDFs.
+- Verification: ran `venv\\Scripts\\python.exe tools\\index_adas.py`.
+  It created/opened the collection and reported 0 found, 0 indexed, 0 failed.
+  System `python` lacks ChromaDB, so project commands use the project venv.
+
+- ADAS step 2: extended `src/agent.py` to search the shared ADAS collection
+  first, provide the document/web/general-knowledge tiers, clarification,
+  stopping-distance, and quiz tools, return source/tier/trace data, and force a
+  final no-tools call at the configured iteration cap. Added assistant/tutor
+  mode and visible answer badges, sources, and tool trace to Flask. Code
+  compilation passed; live calls and full behavior tests are pending.
+- ADAS step 3: added BM25 + reciprocal-rank fusion behind `USE_HYBRID=False`.
+  `rank_bm25` and `pytest` were added to requirements. No real ADAS PDFs are
+  indexed yet, so vector-vs-hybrid ranks/hit rate cannot be measured. The flag
+  remains off pending an A/B run against the user's verified source set.
+- ADAS step 4: `extract_tables_text()` now converts PyMuPDF detected tables to
+  header/value lines before chunking. Regenerated the existing synthetic
+  `data/meridian_report.pdf` with `tools/make_messy_pdf.py`; page-aware
+  extraction produced two chunks and preserved `Model: Falcon-9X; Warranty
+  (months): 24` and the other model/warranty pairs. This confirms extraction
+  structure; no LLM answer generation was used for the measurement.
+
+
+Branding: renamed project to Sentinel (UI, prompts, README)
+
+## Sentinel agent: deterministic evidence routing
+
+- Before (reported behavior), “Who invented cruise control?” could skip
+  `search_docs`, answer from model memory, and return an empty tool trace with
+  no page citation. After: the regression fixture answer is “Ralph Teetor
+  invented cruise control.” with code-added citation `(history.pdf, p. 3)`;
+  `search_docs` is the first trace entry and web search is not called.
+- Before (reported behavior), “What are the SAE levels of automation?” could
+  be treated as off-topic or answered without checking the documents. After:
+  the fixture answer is “The SAE levels range from 0 to 5.” with citation
+  `(automation.pdf, p. 8)` and `answer_source="documents"`.
+- Implemented document-first retrieval in code, a yes/no passage relevance
+  check, document-wide chunk sampling for summary/quiz questions, and web
+  fallback only after document passages are judged insufficient. The model
+  can call only `ask_user`, `stopping_distance`, and `generate_quiz`; labels,
+  citations, and web source metadata are assembled by code. Added output
+  cleanup for model-written labels, URLs, and trailing role tokens.
+- Added regression coverage for web failure cleanup, document questions,
+  document quiz/summary scope, and off-topic recipe refusal. The “before”
+  cases above are the reported symptoms; the “after” answers are deterministic
+  mocked-fixture tests, not a live Ollama evaluation against production PDFs.
+
+## Sentinel scope follow-up fix
+
+- Before: “so can you make me a quiz about that document?” could be declined
+  because the scope gate relied on narrow ADAS keywords and a model classifier.
+  After: the gate declines only clear off-topic patterns with no ADAS or
+  document context; document words and pronoun follow-ups route to the
+  document-wide chunk path. Added regression tests for “make me a quiz about
+  that document”, “quiz me on the pdf”, “what is it about?”, and “summarize
+  this guide”, plus explicit couscous-recipe and World Cup refusals.
