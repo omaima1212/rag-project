@@ -1664,3 +1664,66 @@ Branding: renamed project to Sentinel (UI, prompts, README)
   document-wide chunk path. Added regression tests for “make me a quiz about
   that document”, “quiz me on the pdf”, “what is it about?”, and “summarize
   this guide”, plus explicit couscous-recipe and World Cup refusals.
+
+## Sentinel stopping-distance chart
+
+- Added a local dark-theme stacked chart for reaction and braking distance on
+  dry, wet, snow, and ice roads. Chart values come from the existing
+  `stopping_distance()` calculation; generated PNGs are served only from the
+  whitelisted `results/charts` directory. Successful stopping-distance tool
+  calls attach chart metadata to the answer, while chart errors are logged and
+  do not interrupt text responses. The Flask UI displays the chart with a
+  caption and keyboard-accessible enlargement dialog.
+- Added tests for PNG creation, invalid input, route traversal rejection, and
+  chart attachment only after the stopping-distance tool runs.
+
+## Sentinel routing, answer, and cooldown fixes
+
+- Scope — Before (reported): “so can you make me a quiz about that document?”
+  was declined. After: the scope gate recognizes document words and stems and
+  inherits context for short follow-ups after an in-scope turn; World Cup
+  results remain a clear off-topic decline.
+- Document quizzes and summaries — Before (reported): quiz/summary requests
+  could miss document chunks or claim the document was unavailable. After:
+  these requests use evenly spread document chunks and the passage-only gate
+  requests three four-option questions with correct answers; code adds page
+  citations to each question.
+- Passage relevance — Before (reported): “Why are ADAS names so different
+  between automakers?” on page 1 could be rejected by the strict yes/no gate.
+  After: the model answers from top-k passages and returns exactly `NO_ANSWER`
+  only when the passages do not answer; trace entries include chunk pages and
+  the gate decision.
+- Labels and cleanup — Before (reported): model-written labels, fake URLs, or
+  a trailing `assistant` token could leak into answers. After: cleanup strips
+  those artifacts and code adds a single label for the selected answer tier.
+- Stopping-distance calculation — Before (reported): successful calculations
+  were labeled as general answers, omitted the constants, and the trace only
+  said `ok`. After: they use the calculation label and its distinct badge
+  color, state reaction time and friction, log the full tool result, and attach
+  the generated chart.
+- Web circuit breaker — Before (reported): web search could be retried after a
+  202/rate-limit response or repeated failures. After: search is skipped for
+  `WEB_COOLDOWN_MINUTES` (default 30), and the trace records the cooldown.
+- Duplicate submits — Before (reported): the same user message appeared three
+  times in the log. After: the browser ignores repeated submissions while an
+  answer is in flight, so each active turn creates one request and one visible
+  user message.
+- Added regressions for document quiz follow-ups, the page-1 naming question,
+  label cleanup, calculation chart metadata, cooldown behavior, and World Cup
+  refusal. Checks use mocked model/search responses; no live provider behavior
+  is claimed.
+## 22 October 2026 — ADAS evolution timeline
+
+- Added `data/timelines/adas_eras.json` with the five eras and page 4 source metadata from the supplied guide excerpt.
+- Added a dark, turquoise horizontal timeline chart, generated lazily and served through the existing chart route/modal.
+- ADAS timeline intent is detected in code and attaches the chart to `images` while preserving the normal answer pipeline. Unloaded guide and chart-generation failure cases are handled.
+- Added a prompt rule against ASCII diagrams and cleanup for fenced ASCII box diagrams.
+- Added tests for chart generation, timeline intent, non-matching AEB questions, diagram cleanup, and chart failure fallback.
+
+## 22 October 2026 — Neighbor retrieval and page citations
+
+- Neighbor expansion — Before: retrieval returned only the top-k chunks, so an era list split across a chunk boundary could be incomplete. After: adjacent chunks for the top two hits are deduplicated, ordered by source and chunk index, capped at `TOP_K + 2`, controlled by `EXPAND_NEIGHBORS` (default on), and marked `neighbor` in the source panels.
+- Page citations — Before: chunks stored only a generic page value, and citations could confuse PDF position with the printed page. After: indexing stores `pdf_page` and `printed_page`, prefers the printed page in answer/source/image references, and falls back to `PDF p. N`.
+- Legacy indexes — Before: stored chunks without printed-page metadata remained in use. After: uploads, shared-index runs, and retrieval detect old metadata, re-index locally available PDFs, and print a clear notice.
+- Broad era questions — Before: the prompt did not require every period and date in order. After: both answer pipelines tell the model to include all periods exactly as listed.
+- Added regressions for the Five Eras printed page, adjacent era chunks, the expansion cap, and automatic legacy-index re-indexing.
