@@ -1,23 +1,18 @@
-# Local RAG — Ask Questions About Your PDFs
 
-A retrieval-augmented generation system that answers questions about your own
-documents. Everything runs locally by default: no API keys, no cloud, no data
-leaving the machine — with one deliberate, opt-in exception: an optional web
-search fallback for questions the document can't answer, off unless you turn
-it on. See [Web fallback](#web-fallback-optional) below.
+# Sentinel: ADAS Assistant
 
-Built and tuned on a laptop with **8 GB of RAM and no dedicated GPU**.
+Sentinel is a local, privacy-friendly chatbot that explains driver assistance systems using your documents, with an AI agent that can also search the web when the documents don't cover a question.
 
+**Why the name:** A sentinel watches the road and guards the driver, like ADAS itself.
 ---
 
 ## What it does
 
-Upload a PDF, ask a question in natural language, get an answer drawn **only**
-from that document — together with the passages the answer came from, so you
-can check it.
-
-If the document does not contain the answer, the system says so instead of
-inventing one.
+Ask about ADAS systems, operation, limits, vehicle safety, or related
+automotive technology. Answers show whether they came from documents, the web,
+or general knowledge, with document page citations or web links where relevant.
+The agent can also estimate stopping distance, ask for missing vehicle details,
+and build quizzes in tutor mode.
 
 ---
 
@@ -26,7 +21,8 @@ inventing one.
 Three reasons, and the third is the one people underestimate:
 
 1. **Context limits.** A 3B model on 8 GB of RAM cannot hold a long document.
-2. **Cost and privacy.** Nothing is sent anywhere; the documents stay on disk.
+2. **Cost and privacy.** PDFs and vectors stay on disk. ADAS assistant web
+   searches send the search query to the configured backend when needed.
 3. **Accuracy.** Even when a long document *fits*, models attend poorly to one
    relevant sentence buried in fifty pages. Retrieving 3 relevant passages
    produces better answers than supplying 200 pages of mostly-irrelevant text.
@@ -37,16 +33,77 @@ RAG reframes the problem from *storage* to **selection**.
 
 ## How it works
 
+```mermaid
+flowchart LR
+  PDFs[PDFs + metadata] --> Ingest[PyMuPDF extraction + chunking]
+  Ingest --> Chroma[(Shared ADAS Chroma collection)]
+  User --> Scope[ADAS scope check]
+  Scope --> Agent[Ollama tool-calling agent]
+  Agent --> Search[search_docs]
+  Search --> Chroma
+  Agent --> Web[web_search when docs are insufficient]
+  Agent --> Distance[stopping_distance]
+  Agent --> Clarify[ask_user]
+  Agent --> Quiz[generate_quiz in tutor mode]
+  Agent --> Answer[Answer + tier badge + sources + trace]
 ```
-INDEXING (once per document)
-  PDF ──► text ──► cleaned ──► chunks ──► vectors ──► ChromaDB
-       PyMuPDF          400 words     nomic-embed-text
-                        50 overlap     768 dimensions
 
-QUERYING (every question)
-  question ──► vector ──► top-3 nearest chunks ──► prompt ──► answer
-            same model        cosine similarity     llama3.2:3b
-```
+The original uploaded-PDF chat remains available in **Document chat** mode.
+
+### Retrieval and page citations
+
+The shared ADAS index stores both the physical PDF page (`pdf_page`, starting
+at 1) and the printed page number (`printed_page`) when it can be read from
+the page. Citations use `p. N` for a printed page and `PDF p. N` when no
+printed page is available. The same convention is used in answers, source
+entries, and image captions. Older indexes without this metadata are detected;
+when the corresponding PDF is available locally, Sentinel reports that it is
+re-indexing it.
+
+Neighbor expansion is enabled by default through `EXPAND_NEIGHBORS`. After
+retrieving the top results, Sentinel can add immediately preceding or
+following chunks from the same document for the first two hits. Added chunks
+are deduplicated, kept in document order, capped at `TOP_K + 2`, and marked as
+neighbors in the sources panel. This helps retain facts and lists that span a
+chunk boundary. Set `EXPAND_NEIGHBORS=false` in the environment to turn it off.
+
+For questions about eras or periods, the answer policy asks the model to list
+all periods in order with their exact dates. The application also avoids
+model-drawn ASCII diagrams; it attaches a chart when a supported chart intent
+is detected.
+
+### Charts
+
+Sentinel generates local charts with Matplotlib and serves them through the
+existing chart route and image modal. Numeric stopping-distance answers can
+include a chart comparing reaction and braking distance across road
+conditions. Timeline and evolution questions about ADAS can include a
+horizontal timeline based on `data/timelines/adas_eras.json`, which records
+five eras from the 2021 ADAS Guide. The 2025-and-later era is labeled as
+predicted. Chart generation is optional to the text response: if it fails,
+Sentinel still returns the normal answer.
+
+## Answer policy and modes
+
+The ADAS assistant follows three tiers:
+
+1. **Documents:** search the shared ADAS index first and cite supported claims
+   with their filename and page.
+2. **Web or general knowledge:** if documents do not cover an ADAS question,
+   search with the configured `WEB_SEARCH_BACKEND`. Web answers are labeled and
+   linked. If search fails or returns no useful results, label the answer as
+   unverified general knowledge.
+3. **Off-topic:** politely decline questions outside ADAS, vehicle safety, and
+   closely related automotive technology.
+
+The assistant asks for make/model/year when a car-specific answer needs those
+details. Exact features and thresholds vary by vehicle; check its owner’s
+manual. Numeric stopping-distance estimates use the local calculator and are
+illustrative only. ADAS assists the driver and does not replace them.
+
+**Tutor mode** explains a system in steps, generates multiple-choice quizzes
+from retrieved passages, and grades submitted answers. If no matching
+passages exist, it labels a quiz as based on general knowledge.
 
 The essential constraint: **the same embedding model must be used for indexing
 and querying.** Different models produce vectors in unrelated coordinate
@@ -64,6 +121,8 @@ is why every setting lives in one file, `src/config.py`.
 ```powershell
 ollama pull llama3.2:3b
 ollama pull nomic-embed-text
+# Model comparison candidate; only one chat model is used at a time
+ollama pull qwen2.5:3b
 
 python -m venv venv
 venv\Scripts\activate
@@ -97,7 +156,40 @@ python src\generate.py "your question"            # ask a question
 python src\retrieve.py "your question"            # inspect retrieval only
 python src\evaluate.py "run label"                # run the test suite
 python src\experiment.py "data\yourfile.pdf"      # sweep configurations
+python tools\index_adas.py                        # build/update shared ADAS index
+python src\agent.py "When does AEB intervene?"     # ADAS tool-calling assistant
+python src\eval_adas.py                           # agent vs plain-LLM evaluation
+python tools\check_tool_models.py                 # compare small tool models
 ```
+
+The timeline chart is generated on demand and written to
+`results/charts/adas_timeline.png`; stopping-distance charts are also saved
+under `results/charts/`. Existing chart files are reused.
+
+In the Flask page choose **ADAS assistant** or **ADAS tutor / quiz** in Answer
+mode. These modes search the shared ADAS collection; use Document chat for the
+legacy single-upload workflow. The agent mode selects web search itself when
+needed, independent of the legacy Web fallback toggle.
+
+## ADAS document indexing and agent
+
+Keep source PDFs in `data/adas/` and edit `data/adas/metadata.json` with one
+entry per filename:
+
+```json
+{
+  "adas_guide.pdf": {"system": "AEB", "source_type": "safety_standard", "car_model": ""},
+  "owners_manual.pdf": {"system": "ACC", "source_type": "owners_manual", "car_model": "Toyota Corolla 2024"}
+}
+```
+
+Run `python tools\\index_adas.py`. The indexer is idempotent: unchanged PDFs
+and labels are skipped; changed files or labels are re-indexed into the shared
+`adas_documents` Chroma collection. No ADAS documents are included in this
+repository. The questions in `questions_adas.json` are **placeholders**; verify
+every expected answer and source against your own PDFs before grading results.
+`USE_HYBRID` is off until measured on that real question set. Stopping distance
+is a simplified estimate for explanation, not a vehicle performance prediction.
 
 ---
 
@@ -110,8 +202,16 @@ python src\experiment.py "data\yourfile.pdf"      # sweep configurations
 | `src/embed.py` | Chunks → vectors → ChromaDB |
 | `src/retrieve.py` | Question → most similar chunks |
 | `src/generate.py` | Chunks + question → grounded answer |
+| `src/agent.py` | ADAS policy, tool loop, answer tier/source assignment |
+| `src/citations.py` | Printed-page-first citation formatting |
+| `src/charts.py` | Stopping-distance and ADAS timeline chart generation |
+| `src/eval_adas.py` | Timestamped ADAS agent vs plain-LLM evaluation |
 | `src/app.py` | Streamlit chat interface |
 | `src/server.py` + `src/web/index.html` | Flask + plain HTML/JS interface — lighter alternative to Streamlit |
+| `tools/index_adas.py` | Idempotent shared ADAS PDF indexer |
+| `tools/check_tool_models.py` | Sequential small-model tool-use comparison |
+| `data/adas/metadata.json` | Source labels for user-provided ADAS PDFs |
+| `data/timelines/adas_eras.json` | Five ADAS eras used by the timeline chart |
 | `src/websearch.py` | Optional web fallback (Google or DuckDuckGo, see below) — the only network calls in the project that aren't to local Ollama |
 | `src/evaluate.py` | Test suite over `questions.json`, writes reports |
 | `src/experiment.py` | Configuration sweeps: chunking, k, header content — retrieval-only |
@@ -131,15 +231,17 @@ All in `src/config.py`:
 | `CHUNK_SIZE` | 400 words | Specific enough to discriminate, large enough to stand alone |
 | `CHUNK_OVERLAP` | 50 words | Measured: beat no-overlap on 5/5 test questions |
 | `TOP_K` | 3 | k=1 failed a positional question; k=5 adds chunks at the noise floor |
+| `EXPAND_NEIGHBORS` | `True` | Adds adjacent chunks for the top two hits, capped at `TOP_K + 2` |
 | `USE_CONTEXT_HEADERS` | `True` | Fixes positional retrieval — see below |
 | `HEADER_INCLUDE_FILENAME` | `False` | Filename in the header leaked into every chunk's vector, inflating scores on questions sharing vocabulary with the filename. A/B/C sweep across all 8 test questions showed structure-only headers keep the positional fix and reduce that inflation — see below |
+| `USE_HYBRID` | `False` | BM25 + reciprocal-rank fusion stays off until it wins an A/B run on verified ADAS questions |
 
 **Changing any embedding-affecting setting requires re-indexing.** The config
 describes intent; the database holds state, and they drift apart silently.
 
 ---
 
-## Engineering notes
+## Development history and engineering notes
 
 Development was measurement-driven rather than intuition-driven. `evaluate.py`
 runs a fixed 8-question suite and writes timestamped reports to `results/`, so
@@ -263,10 +365,14 @@ prompt now explicitly forbids citing internal labels.
 
 ---
 
-## Web fallback (optional)
+## Legacy document-chat web fallback
 
-Off by default. A toggle in both UIs' sidebar — "Search the web if not in
-doc" — that only does anything when **both** of these are true:
+The original Document chat mode retains its opt-in sidebar toggle. In ADAS
+assistant/tutor mode, the agent selects web search itself after checking the
+shared ADAS library; the legacy toggle does not control agent behavior.
+Agent web searches follow the same configured backend described below.
+
+For Document chat mode, the toggle only does anything when **both** are true:
 
 1. You turned it on for this session.
 2. The document has already been asked, and the grounded answer looked like
@@ -274,7 +380,7 @@ doc" — that only does anything when **both** of these are true:
    grade the test suite — one definition, used to decide behaviour in two
    places now, not two definitions that could drift apart).
 
-When it fires, the question goes out to whichever backend `config.py` names
+When it fires, the document-chat question goes out to whichever backend `config.py` names
 (`WEB_SEARCH_BACKEND`), the top few results are shown as sources, and a
 *second*, clearly separate answer is generated from those snippets —
 labelled "Web fallback — not from your document" in both UIs, teal instead
@@ -283,12 +389,9 @@ answer at a glance. If the search step itself fails, the grounded refusal
 above it is untouched — a failed web step is a lost extra, not a failed
 turn.
 
-**This is the one deliberate exception to "nothing leaves the machine."**
-Turning it on means your question is sent out when the document doesn't
-answer it. It does not change what happens for questions the document
-*does* answer — those never touch the network, on or off — and it does not
-change the default: everything above this section describes the system
-with the toggle off, which is how it behaves unless you act.
+Search queries leave the machine in ADAS agent mode when it needs external
+information, and in Document chat mode only when the user enables the toggle.
+Local PDFs and embeddings stay on disk.
 
 ### Two backends, chosen in `config.py`, not one hardcoded choice
 
@@ -385,15 +488,13 @@ exactly what they always did.
 - **Scanned PDFs are not supported.** No text layer; would require OCR. This
   now fails with a clear message instead of a crash (see above) — it is
   still not *handled*, only *reported*.
-- **Tables extract poorly, confirmed.** Column structure is lost on
-  extraction; a small model can sometimes recover a fact by counting
-  position in the flattened row, but not reliably — see "Follow-up
-  findings" above for a concrete failure. Multi-column *prose*, by contrast,
-  extracted correctly in the one layout tested — that specific concern was
-  weaker than assumed.
-- **Positional and exact-identifier queries remain weaker than topical ones.**
-  Context headers reduce this but do not remove it; hybrid keyword search
-  would address it properly.
+- **Table extraction helps but remains layout-dependent.** PyMuPDF `find_tables()`
+  now appends explicit header/value lines; the synthetic warranty table passed
+  extraction inspection. Other PDF table layouts still need evaluation.
+- **Exact-identifier retrieval remains under evaluation.** BM25 + reciprocal
+  rank fusion is implemented behind `USE_HYBRID=False`. There are no real ADAS
+  PDFs indexed yet, so it stays disabled until the provided A/B evaluator can
+  measure hit rate and rank on verified questions.
 - **Header text still leaks into the semantic space, reduced but not
   eliminated.** Dropping the filename from the header (see above) roughly
   halved the score inflation on a topically-related unanswerable question;
@@ -414,10 +515,9 @@ exactly what they always did.
   but not a real click-through with a model actually generating on screen,
   to avoid competing with other running applications for RAM on an 8 GB
   machine.
-- **Cross-document retrieval is not built.** `embed.index_pdf` can index
-  several files into one collection, and every retrieved chunk carries its
-  source filename, but both UIs' upload flow creates one collection per
-  uploaded file and queries only that one per session.
+- **The legacy upload chat remains single-document per session.** The ADAS
+  assistant uses the separate shared `adas_documents` collection across all
+  indexed PDFs.
 - **Slow.** 30–100 seconds per answer on CPU, with high variance from model
   loading and memory pressure.
 
@@ -426,8 +526,7 @@ exactly what they always did.
 ## Possible extensions
 
 - OCR for scanned documents
-- Hybrid retrieval (semantic + BM25) for exact identifiers and dates
 - Reranking with a cross-encoder
-- Cross-document retrieval with per-answer source attribution
-- Conversational memory across turns
-- Automated evaluation metrics (RAGAS and similar)
+- Measure hybrid retrieval after adding verified ADAS documents
+- Improve quiz, conversational memory, and evaluation after reviewing the
+  placeholder ADAS question set against real sources
